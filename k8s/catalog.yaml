@@ -1,0 +1,195 @@
+---
+# ─── catalog-db (MariaDB) ──────────────────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: catalog-db-pvc
+  namespace: retail-store
+  labels:
+    app: catalog-db
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ebs-gp3    # AWS EBS gp3 via EBS CSI driver
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog-db
+  namespace: retail-store
+  labels:
+    app: catalog-db
+    component: database
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: catalog-db
+  template:
+    metadata:
+      labels:
+        app: catalog-db
+        component: database
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        fsGroup: 999
+      containers:
+        - name: mariadb
+          image: mariadb:10.9
+          ports:
+            - containerPort: 3306
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: catalog-db-secret
+                  key: db-password
+            - name: MYSQL_DATABASE
+              value: catalogdb
+            - name: MYSQL_USER
+              value: catalog_user
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: catalog-db-secret
+                  key: db-password
+          volumeMounts:
+            - name: catalog-db-data
+              mountPath: /var/lib/mysql
+          readinessProbe:
+            exec:
+              command:
+                - mysqladmin
+                - ping
+                - -h
+                - localhost
+                - -u
+                - catalog_user
+                - -p$(MYSQL_PASSWORD)
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command:
+                - mysqladmin
+                - ping
+                - -h
+                - localhost
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: catalog-db-data
+          persistentVolumeClaim:
+            claimName: catalog-db-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalog-db
+  namespace: retail-store
+spec:
+  selector:
+    app: catalog-db
+  ports:
+    - port: 3306
+      targetPort: 3306
+
+---
+# ─── catalog ──────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog
+  namespace: retail-store
+  labels:
+    app: catalog
+    component: service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: catalog
+  template:
+    metadata:
+      labels:
+        app: catalog
+        component: service
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: catalog
+          image: ghcr.io/hlaingminpaing/retail-store-sample-catalog:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: GIN_MODE
+              value: release
+            - name: RETAIL_CATALOG_PERSISTENCE_PROVIDER
+              value: mysql
+            - name: RETAIL_CATALOG_PERSISTENCE_ENDPOINT
+              value: catalog-db:3306
+            - name: RETAIL_CATALOG_PERSISTENCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: catalog-db-secret
+                  key: db-password
+            - name: RETAIL_CATALOG_SEARCH_ENABLED
+              value: "false"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalog
+  namespace: retail-store
+spec:
+  selector:
+    app: catalog
+  ports:
+    - port: 80
+      targetPort: 8080

@@ -1,0 +1,13 @@
+apiVersion: v2
+name: retail-store
+description: AWS Retail Store Sample Application Helm Chart
+type: application
+version: 0.1.0
+appVersion: "latest"
+keywords:
+  - retail
+  - microservices
+  - aws
+maintainers:
+  - name: hlaingminpaing
+home: https://github.com/hlaingminpaing/retail-store-sample-app

@@ -1,0 +1,228 @@
+{{- if .Values.ordersDb.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: orders-db-pvc
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "retail-store.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.ordersDb.persistence.storageClass }}
+  storageClassName: {{ .Values.ordersDb.persistence.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.ordersDb.persistence.size }}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders-db
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "retail-store.labels" . | nindent 4 }}
+    {{- include "retail-store.selectorLabels" (dict "name" "orders-db" "context" .) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "retail-store.selectorLabels" (dict "name" "orders-db" "context" .) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "retail-store.selectorLabels" (dict "name" "orders-db" "context" .) | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        fsGroup: 999
+      containers:
+        - name: postgres
+          image: "{{ .Values.ordersDb.image.repository }}:{{ .Values.ordersDb.image.tag }}"
+          imagePullPolicy: {{ .Values.ordersDb.image.pullPolicy }}
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: {{ .Values.ordersDb.database }}
+            - name: POSTGRES_USER
+              value: {{ .Values.ordersDb.username }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: orders-db-secret
+                  key: db-password
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-d", "{{ .Values.ordersDb.database }}", "-U", "{{ .Values.ordersDb.username }}"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 30
+          resources:
+            {{- toYaml .Values.ordersDb.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: orders-db-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orders-db
+  namespace: {{ .Values.global.namespace }}
+spec:
+  selector:
+    {{- include "retail-store.selectorLabels" (dict "name" "orders-db" "context" .) | nindent 4 }}
+  ports:
+    - port: 5432
+      targetPort: 5432
+{{- end }}
+
+{{- if .Values.rabbitmq.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rabbitmq
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "retail-store.labels" . | nindent 4 }}
+    {{- include "retail-store.selectorLabels" (dict "name" "rabbitmq" "context" .) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "retail-store.selectorLabels" (dict "name" "rabbitmq" "context" .) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "retail-store.selectorLabels" (dict "name" "rabbitmq" "context" .) | nindent 8 }}
+    spec:
+      containers:
+        - name: rabbitmq
+          image: "{{ .Values.rabbitmq.image.repository }}:{{ .Values.rabbitmq.image.tag }}"
+          imagePullPolicy: {{ .Values.rabbitmq.image.pullPolicy }}
+          ports:
+            - containerPort: 5672
+            - containerPort: 15672
+          env:
+            - name: RABBITMQ_DEFAULT_USER
+              value: {{ .Values.rabbitmq.username }}
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: orders-db-secret
+                  key: rabbitmq-password
+          readinessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "ping"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.rabbitmq.resources | nindent 12 }}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  namespace: {{ .Values.global.namespace }}
+spec:
+  selector:
+    {{- include "retail-store.selectorLabels" (dict "name" "rabbitmq" "context" .) | nindent 4 }}
+  ports:
+    - name: amqp
+      port: 5672
+      targetPort: 5672
+    - name: management
+      port: 15672
+      targetPort: 15672
+{{- end }}
+
+{{- if .Values.orders.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "retail-store.labels" . | nindent 4 }}
+    {{- include "retail-store.selectorLabels" (dict "name" "orders" "context" .) | nindent 4 }}
+spec:
+  replicas: {{ .Values.orders.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "retail-store.selectorLabels" (dict "name" "orders" "context" .) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "retail-store.selectorLabels" (dict "name" "orders" "context" .) | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: orders
+          image: {{ include "retail-store.appImage" (dict "repo" .Values.orders.image "context" .) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: 8080
+          env:
+            {{- range $key, $val := .Values.orders.env }}
+            - name: {{ $key }}
+              value: {{ $val | quote }}
+            {{- end }}
+            - name: RETAIL_ORDERS_PERSISTENCE_ENDPOINT
+              value: orders-db:5432
+            - name: RETAIL_ORDERS_PERSISTENCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: orders-db-secret
+                  key: db-password
+            - name: RETAIL_ORDERS_MESSAGING_RABBITMQ_ADDRESSES
+              value: rabbitmq:5672
+            - name: RETAIL_ORDERS_MESSAGING_RABBITMQ_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: orders-db-secret
+                  key: rabbitmq-password
+          readinessProbe:
+            {{- toYaml .Values.orders.readinessProbe | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.orders.livenessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.orders.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orders
+  namespace: {{ .Values.global.namespace }}
+spec:
+  selector:
+    {{- include "retail-store.selectorLabels" (dict "name" "orders" "context" .) | nindent 4 }}
+  ports:
+    - port: {{ .Values.orders.service.port }}
+      targetPort: 8080
+{{- end }}

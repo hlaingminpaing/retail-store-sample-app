@@ -1,0 +1,98 @@
+{{- if .Values.ui.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ui
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "retail-store.labels" . | nindent 4 }}
+    {{- include "retail-store.selectorLabels" (dict "name" "ui" "context" .) | nindent 4 }}
+spec:
+  replicas: {{ .Values.ui.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "retail-store.selectorLabels" (dict "name" "ui" "context" .) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "retail-store.selectorLabels" (dict "name" "ui" "context" .) | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: ui
+          image: {{ include "retail-store.appImage" (dict "repo" .Values.ui.image "context" .) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: 8080
+          env:
+            {{- range $key, $val := .Values.ui.env }}
+            - name: {{ $key }}
+              value: {{ $val | quote }}
+            {{- end }}
+            - name: RETAIL_UI_CATALOG_URL
+              value: http://catalog
+            - name: RETAIL_UI_CART_URL
+              value: http://cart
+            - name: RETAIL_UI_CHECKOUT_URL
+              value: http://checkout
+            - name: RETAIL_UI_ORDERS_URL
+              value: http://orders
+          readinessProbe:
+            {{- toYaml .Values.ui.readinessProbe | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.ui.livenessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.ui.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ui
+  namespace: {{ .Values.global.namespace }}
+spec:
+  type: {{ .Values.ui.service.type }}
+  selector:
+    {{- include "retail-store.selectorLabels" (dict "name" "ui" "context" .) | nindent 4 }}
+  ports:
+    - port: {{ .Values.ui.service.port }}
+      targetPort: 8080
+
+{{- if .Values.ui.ingress.enabled }}
+---
+# ─── Ingress (AWS ALB) ────────────────────────────────────────────────────────
+# Annotations from values.yaml configure the AWS Load Balancer Controller.
+# The controller reads kubernetes.io/ingress.class: alb and creates an ALB.
+# Do NOT set ingressClassName — it conflicts with the annotation approach.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: retail-store-ingress
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "retail-store.labels" . | nindent 4 }}
+  {{- with .Values.ui.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  rules:
+    - host: {{ .Values.ui.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ui
+                port:
+                  number: {{ .Values.ui.service.port }}
+{{- end }}
+{{- end }}

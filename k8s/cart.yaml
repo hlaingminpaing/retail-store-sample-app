@@ -1,0 +1,144 @@
+---
+# ─── carts-db (DynamoDB Local) ────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: carts-db
+  namespace: retail-store
+  labels:
+    app: carts-db
+    component: database
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: carts-db
+  template:
+    metadata:
+      labels:
+        app: carts-db
+        component: database
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: dynamodb-local
+          image: amazon/dynamodb-local:1.20.0
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: 200m
+              memory: 512Mi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: carts-db
+  namespace: retail-store
+spec:
+  selector:
+    app: carts-db
+  ports:
+    - port: 8000
+      targetPort: 8000
+
+---
+# ─── cart ─────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cart
+  namespace: retail-store
+  labels:
+    app: cart
+    component: service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cart
+  template:
+    metadata:
+      labels:
+        app: cart
+        component: service
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: cart
+          image: ghcr.io/hlaingminpaing/retail-store-sample-cart:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: SERVER_TOMCAT_ACCESSLOG_ENABLED
+              value: "true"
+            - name: RETAIL_CART_PERSISTENCE_PROVIDER
+              value: dynamodb
+            - name: RETAIL_CART_PERSISTENCE_DYNAMODB_ENDPOINT
+              value: http://carts-db:8000
+            - name: RETAIL_CART_PERSISTENCE_DYNAMODB_CREATE_TABLE
+              value: "true"
+            - name: AWS_ACCESS_KEY_ID
+              value: key
+            - name: AWS_SECRET_ACCESS_KEY
+              value: dummy
+            - name: AWS_DEFAULT_REGION
+              value: us-east-1
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 40
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cart
+  namespace: retail-store
+spec:
+  selector:
+    app: cart
+  ports:
+    - port: 80
+      targetPort: 8080

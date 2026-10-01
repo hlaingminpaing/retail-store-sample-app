@@ -1,0 +1,19 @@
+---
+# ─── StorageClass: AWS EBS gp3 ────────────────────────────────────────────────
+# Requires the AWS EBS CSI driver to be installed on your EKS cluster.
+# Install: https://docs.aws.amazon.com/eks/latest/userguide/ebs-csi.html
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ebs-gp3
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+provisioner: ebs.csi.aws.com
+volumeBindingMode: WaitForFirstConsumer   # waits until pod is scheduled to pick AZ
+reclaimPolicy: Retain                     # keep data even after PVC is deleted
+allowVolumeExpansion: true
+parameters:
+  type: gp3
+  iops: "3000"
+  throughput: "125"
+  encrypted: "true"

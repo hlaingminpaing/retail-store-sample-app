@@ -1,0 +1,139 @@
+---
+# ─── ui ───────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ui
+  namespace: retail-store
+  labels:
+    app: ui
+    component: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ui
+  template:
+    metadata:
+      labels:
+        app: ui
+        component: frontend
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: ui
+          image: ghcr.io/hlaingminpaing/retail-store-sample-ui:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: JAVA_OPTS
+              value: "-XX:MaxRAMPercentage=75.0 -Djava.security.egd=file:/dev/urandom"
+            - name: SERVER_TOMCAT_ACCESSLOG_ENABLED
+              value: "true"
+            - name: SPRING_PROFILES_ACTIVE
+              value: prod
+            - name: RETAIL_UI_SEARCH_ENABLED
+              value: "false"
+            # Backend service URLs
+            - name: RETAIL_UI_CATALOG_URL
+              value: http://catalog
+            - name: RETAIL_UI_CART_URL
+              value: http://cart
+            - name: RETAIL_UI_CHECKOUT_URL
+              value: http://checkout
+            - name: RETAIL_UI_ORDERS_URL
+              value: http://orders
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 40
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ui
+  namespace: retail-store
+spec:
+  selector:
+    app: ui
+  ports:
+    - port: 80
+      targetPort: 8080
+
+---
+# ─── Ingress (AWS ALB) ────────────────────────────────────────────────────────
+# Requires the AWS Load Balancer Controller installed on your EKS cluster.
+# Install: https://docs.aws.amazon.com/eks/latest/userguide/aws-load-balancer-controller.html
+#
+# The controller reads annotations to configure the ALB.
+# An IAM role with the LBC policy must be attached to the controller service account.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: retail-store-ingress
+  namespace: retail-store
+  annotations:
+    # ── ALB Controller ──────────────────────────────────────────────────────
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing        # public ALB
+    alb.ingress.kubernetes.io/target-type: ip                # EKS VPC CNI (pod IP)
+    alb.ingress.kubernetes.io/load-balancer-name: retail-store-alb
+
+    # ── Listener ports & HTTPS ───────────────────────────────────────────────
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    # Redirect all HTTP → HTTPS (uncomment once you have a cert):
+    # alb.ingress.kubernetes.io/ssl-redirect: "443"
+    # alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:REGION:ACCOUNT:certificate/CERT-ID
+
+    # ── Health check ─────────────────────────────────────────────────────────
+    alb.ingress.kubernetes.io/healthcheck-path: /actuator/health
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "15"
+    alb.ingress.kubernetes.io/healthcheck-timeout-seconds: "5"
+    alb.ingress.kubernetes.io/healthy-threshold-count: "2"
+    alb.ingress.kubernetes.io/unhealthy-threshold-count: "3"
+
+    # ── Idle timeout & access logs ────────────────────────────────────────────
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=60
+
+    # ── Tags propagated to the ALB resource ──────────────────────────────────
+    alb.ingress.kubernetes.io/tags: app=retail-store,managed-by=kubernetes
+
+spec:
+  # NOTE: do NOT set ingressClassName when using the annotation above —
+  # the two approaches are mutually exclusive.
+  rules:
+    - host: retail-store.example.com   # <-- change to your domain / leave blank for any host
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ui
+                port:
+                  number: 80

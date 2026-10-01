@@ -1,0 +1,115 @@
+{{- if .Values.cartsDb.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: carts-db
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "retail-store.labels" . | nindent 4 }}
+    {{- include "retail-store.selectorLabels" (dict "name" "carts-db" "context" .) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "retail-store.selectorLabels" (dict "name" "carts-db" "context" .) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "retail-store.selectorLabels" (dict "name" "carts-db" "context" .) | nindent 8 }}
+    spec:
+      containers:
+        - name: dynamodb-local
+          image: "{{ .Values.cartsDb.image.repository }}:{{ .Values.cartsDb.image.tag }}"
+          imagePullPolicy: {{ .Values.cartsDb.image.pullPolicy }}
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.cartsDb.resources | nindent 12 }}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: carts-db
+  namespace: {{ .Values.global.namespace }}
+spec:
+  selector:
+    {{- include "retail-store.selectorLabels" (dict "name" "carts-db" "context" .) | nindent 4 }}
+  ports:
+    - port: 8000
+      targetPort: 8000
+{{- end }}
+
+{{- if .Values.cart.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cart
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "retail-store.labels" . | nindent 4 }}
+    {{- include "retail-store.selectorLabels" (dict "name" "cart" "context" .) | nindent 4 }}
+spec:
+  replicas: {{ .Values.cart.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "retail-store.selectorLabels" (dict "name" "cart" "context" .) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "retail-store.selectorLabels" (dict "name" "cart" "context" .) | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: cart
+          image: {{ include "retail-store.appImage" (dict "repo" .Values.cart.image "context" .) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: 8080
+          env:
+            {{- range $key, $val := .Values.cart.env }}
+            - name: {{ $key }}
+              value: {{ $val | quote }}
+            {{- end }}
+            - name: RETAIL_CART_PERSISTENCE_DYNAMODB_ENDPOINT
+              value: http://carts-db:8000
+          readinessProbe:
+            {{- toYaml .Values.cart.readinessProbe | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.cart.livenessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.cart.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cart
+  namespace: {{ .Values.global.namespace }}
+spec:
+  selector:
+    {{- include "retail-store.selectorLabels" (dict "name" "cart" "context" .) | nindent 4 }}
+  ports:
+    - port: {{ .Values.cart.service.port }}
+      targetPort: 8080
+{{- end }}

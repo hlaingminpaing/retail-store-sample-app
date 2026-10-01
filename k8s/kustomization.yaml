@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: retail-store
+
+resources:
+  - namespace.yaml
+  - secrets.yaml
+  - storageclass.yaml   # ebs-gp3 StorageClass — must exist before PVCs are created
+  - catalog.yaml
+  - cart.yaml
+  - orders.yaml
+  - checkout.yaml
+  - ui.yaml

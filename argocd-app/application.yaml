@@ -1,0 +1,62 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: retail-store
+  namespace: argocd           # ArgoCD itself must be installed in the argocd namespace
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io   # clean up k8s resources when this App is deleted
+  labels:
+    app.kubernetes.io/name: retail-store
+    app.kubernetes.io/part-of: retail-store-platform
+spec:
+  # ─── Project ────────────────────────────────────────────────────────────────
+  project: default            # change to your ArgoCD project if you have one
+
+  # ─── Source ─────────────────────────────────────────────────────────────────
+  source:
+    repoURL: https://github.com/hlaingminpaing/retail-store-sample-app
+    targetRevision: main       # tracks the main branch; pin to a tag for prod
+    path: helm-chart           # path to the Helm chart inside the repo
+
+    helm:
+      releaseName: retail-store
+      # Override any values here — secrets should be managed via sealed-secrets
+      # or an external secrets operator, not committed to this file.
+      values: |
+        global:
+          imageRegistry: ghcr.io/hlaingminpaing
+          imageTag: latest    # <-- CI pipeline will update this to the git SHA / tag
+
+        ui:
+          ingress:
+            host: retail-store.example.com   # <-- change to your domain
+
+  # ─── Destination ────────────────────────────────────────────────────────────
+  destination:
+    server: https://kubernetes.default.svc   # in-cluster deployment
+    namespace: retail-store
+
+  # ─── Sync Policy ────────────────────────────────────────────────────────────
+  syncPolicy:
+    automated:
+      prune: true             # delete resources removed from git
+      selfHeal: true          # revert manual changes made directly in the cluster
+      allowEmpty: false       # do not sync if the rendered manifests are empty
+    syncOptions:
+      - CreateNamespace=true  # ArgoCD will create the namespace if it doesn't exist
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  # ─── Health / Ignore ────────────────────────────────────────────────────────
+  ignoreDifferences:
+    # Ignore the replicas field so HPA can freely scale without ArgoCD reverting it
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas

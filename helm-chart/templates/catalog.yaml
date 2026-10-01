@@ -1,0 +1,165 @@
+{{- if and .Values.catalog.enabled .Values.catalogDb.enabled }}
+---
+# ─── PVC ──────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: catalog-db-pvc
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "retail-store.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.catalogDb.persistence.storageClass }}
+  storageClassName: {{ .Values.catalogDb.persistence.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.catalogDb.persistence.size }}
+
+---
+# ─── catalog-db Deployment ────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog-db
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "retail-store.labels" . | nindent 4 }}
+    {{- include "retail-store.selectorLabels" (dict "name" "catalog-db" "context" .) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "retail-store.selectorLabels" (dict "name" "catalog-db" "context" .) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "retail-store.selectorLabels" (dict "name" "catalog-db" "context" .) | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        fsGroup: 999
+      containers:
+        - name: mariadb
+          image: "{{ .Values.catalogDb.image.repository }}:{{ .Values.catalogDb.image.tag }}"
+          imagePullPolicy: {{ .Values.catalogDb.image.pullPolicy }}
+          ports:
+            - containerPort: 3306
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: catalog-db-secret
+                  key: db-password
+            - name: MYSQL_DATABASE
+              value: {{ .Values.catalogDb.database }}
+            - name: MYSQL_USER
+              value: {{ .Values.catalogDb.username }}
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: catalog-db-secret
+                  key: db-password
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+          readinessProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "localhost"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.catalogDb.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: catalog-db-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalog-db
+  namespace: {{ .Values.global.namespace }}
+spec:
+  selector:
+    {{- include "retail-store.selectorLabels" (dict "name" "catalog-db" "context" .) | nindent 4 }}
+  ports:
+    - port: 3306
+      targetPort: 3306
+{{- end }}
+
+{{- if .Values.catalog.enabled }}
+---
+# ─── catalog Deployment ───────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "retail-store.labels" . | nindent 4 }}
+    {{- include "retail-store.selectorLabels" (dict "name" "catalog" "context" .) | nindent 4 }}
+spec:
+  replicas: {{ .Values.catalog.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "retail-store.selectorLabels" (dict "name" "catalog" "context" .) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "retail-store.selectorLabels" (dict "name" "catalog" "context" .) | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: catalog
+          image: {{ include "retail-store.appImage" (dict "repo" .Values.catalog.image "context" .) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: 8080
+          env:
+            {{- range $key, $val := .Values.catalog.env }}
+            - name: {{ $key }}
+              value: {{ $val | quote }}
+            {{- end }}
+            - name: RETAIL_CATALOG_PERSISTENCE_PROVIDER
+              value: mysql
+            - name: RETAIL_CATALOG_PERSISTENCE_ENDPOINT
+              value: catalog-db:3306
+            - name: RETAIL_CATALOG_PERSISTENCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: catalog-db-secret
+                  key: db-password
+          readinessProbe:
+            {{- toYaml .Values.catalog.readinessProbe | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.catalog.livenessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.catalog.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalog
+  namespace: {{ .Values.global.namespace }}
+spec:
+  selector:
+    {{- include "retail-store.selectorLabels" (dict "name" "catalog" "context" .) | nindent 4 }}
+  ports:
+    - port: {{ .Values.catalog.service.port }}
+      targetPort: 8080
+{{- end }}

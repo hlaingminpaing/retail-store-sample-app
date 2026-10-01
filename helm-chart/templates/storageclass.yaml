@@ -1,0 +1,23 @@
+{{- if .Values.catalogDb.enabled }}
+---
+# ─── StorageClass: AWS EBS gp3 ────────────────────────────────────────────────
+# Requires the AWS EBS CSI driver add-on on EKS.
+# Install docs: https://docs.aws.amazon.com/eks/latest/userguide/ebs-csi.html
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ebs-gp3
+  labels:
+    {{- include "retail-store.labels" . | nindent 4 }}
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+provisioner: ebs.csi.aws.com
+volumeBindingMode: WaitForFirstConsumer   # waits for pod scheduling to pick AZ
+reclaimPolicy: Retain                     # keep volume after PVC deletion
+allowVolumeExpansion: true
+parameters:
+  type: gp3
+  iops: "3000"
+  throughput: "125"
+  encrypted: "true"
+{{- end }}

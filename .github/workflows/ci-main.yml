@@ -1,0 +1,118 @@
+name: CI/CD — Merge to Main (Tag & Release)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Triggers:
+#   - Push to main (after PR merge) → build + test + auto-create a semver tag
+# ──────────────────────────────────────────────────────────────────────────────
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write   # needed to push the git tag
+  packages: write   # needed to push to GHCR
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # 1. Build & Test all services
+  # ──────────────────────────────────────────────────────────────────────────
+  build-test:
+    name: Build & Test — ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: ui
+            lang: java
+            dir: src/ui
+          - service: cart
+            lang: java
+            dir: src/cart
+          - service: orders
+            lang: java
+            dir: src/orders
+          - service: catalog
+            lang: go
+            dir: src/catalog
+          - service: checkout
+            lang: node
+            dir: src/checkout
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Java services ──────────────────────────────────────────────────────
+      - name: Set up Java 21
+        if: matrix.lang == 'java'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Build & test (Maven)
+        if: matrix.lang == 'java'
+        working-directory: ${{ matrix.dir }}
+        run: |
+          ./mvnw -DskipTests package -q
+          ./mvnw test -q
+
+      # ── Go services ───────────────────────────────────────────────────────
+      - name: Set up Go
+        if: matrix.lang == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.dir }}/go.mod
+          cache-dependency-path: ${{ matrix.dir }}/go.sum
+
+      - name: Build & test (Go)
+        if: matrix.lang == 'go'
+        working-directory: ${{ matrix.dir }}
+        run: |
+          go build -o /dev/null ./...
+          go test ./...
+
+      # ── Node services ─────────────────────────────────────────────────────
+      - name: Set up Node 20
+        if: matrix.lang == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: yarn
+          cache-dependency-path: ${{ matrix.dir }}/yarn.lock
+
+      - name: Build & test (Node)
+        if: matrix.lang == 'node'
+        working-directory: ${{ matrix.dir }}
+        run: |
+          yarn install --frozen-lockfile
+          yarn test --passWithNoTests
+          yarn build
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 2. Create a new semver tag (patch bump, e.g. v1.0.0 → v1.0.1)
+  # ──────────────────────────────────────────────────────────────────────────
+  tag:
+    name: Create Release Tag
+    needs: build-test
+    runs-on: ubuntu-latest
+    outputs:
+      new_tag: ${{ steps.bump.outputs.new_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # need full history to find the latest tag
+
+      - name: Bump semver tag (patch)
+        id: bump
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          default_bump: patch       # auto bump patch; commit message can override with #minor or #major
+          release_branches: main
+          tag_prefix: "v"
+
+      - name: Print new tag
+        run: echo "New tag is ${{ steps.bump.outputs.new_tag }}"

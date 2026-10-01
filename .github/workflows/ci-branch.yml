@@ -1,0 +1,169 @@
+name: CI — Build & Test (Branch)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Triggers:
+#   - Any push to a non-main branch  → build + test only (no image push)
+#   - Pull request targeting main    → build + test only (no image push)
+# ──────────────────────────────────────────────────────────────────────────────
+on:
+  push:
+    branches-ignore:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: read      # read-only; branch builds do NOT push
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Build & test each service in parallel
+  # ──────────────────────────────────────────────────────────────────────────
+  build-ui:
+    name: Build — ui
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Build ui (Maven)
+        working-directory: src/ui
+        run: ./mvnw -DskipTests package -q
+
+      - name: Test ui
+        working-directory: src/ui
+        run: ./mvnw test -q
+
+      - name: Build Docker image (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: src/ui
+          push: false
+          tags: ghcr.io/hlaingminpaing/retail-store-sample-ui:${{ github.sha }}
+
+  # ──────────────────────────────────────────────────────────────────────────
+  build-catalog:
+    name: Build — catalog
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/catalog/go.mod
+          cache-dependency-path: src/catalog/go.sum
+
+      - name: Build catalog (Go)
+        working-directory: src/catalog
+        run: go build -o /dev/null ./...
+
+      - name: Test catalog
+        working-directory: src/catalog
+        run: go test ./...
+
+      - name: Build Docker image (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: src/catalog
+          push: false
+          tags: ghcr.io/hlaingminpaing/retail-store-sample-catalog:${{ github.sha }}
+
+  # ──────────────────────────────────────────────────────────────────────────
+  build-cart:
+    name: Build — cart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Build cart (Maven)
+        working-directory: src/cart
+        run: ./mvnw -DskipTests package -q
+
+      - name: Test cart
+        working-directory: src/cart
+        run: ./mvnw test -q
+
+      - name: Build Docker image (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: src/cart
+          push: false
+          tags: ghcr.io/hlaingminpaing/retail-store-sample-cart:${{ github.sha }}
+
+  # ──────────────────────────────────────────────────────────────────────────
+  build-orders:
+    name: Build — orders
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Build orders (Maven)
+        working-directory: src/orders
+        run: ./mvnw -DskipTests package -q
+
+      - name: Test orders
+        working-directory: src/orders
+        run: ./mvnw test -q
+
+      - name: Build Docker image (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: src/orders
+          push: false
+          tags: ghcr.io/hlaingminpaing/retail-store-sample-orders:${{ github.sha }}
+
+  # ──────────────────────────────────────────────────────────────────────────
+  build-checkout:
+    name: Build — checkout
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: yarn
+          cache-dependency-path: src/checkout/yarn.lock
+
+      - name: Install dependencies
+        working-directory: src/checkout
+        run: yarn install --frozen-lockfile
+
+      - name: Test checkout
+        working-directory: src/checkout
+        run: yarn test --passWithNoTests
+
+      - name: Build checkout
+        working-directory: src/checkout
+        run: yarn build
+
+      - name: Build Docker image (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: src/checkout
+          push: false
+          tags: ghcr.io/hlaingminpaing/retail-store-sample-checkout:${{ github.sha }}
